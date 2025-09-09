@@ -1,6 +1,7 @@
 {
   "name": "platav3-client",
   "version": "1.0.0",
+  "type": "module",
   "description": "React PWA frontend for PLATAv3 finance app",
   "scripts": {
     "dev": "vite",
