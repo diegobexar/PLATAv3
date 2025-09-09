@@ -1,5 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
+import { Transaction } from '../types';
+import * as transactionService from '../services/transactionService';
 
 interface TransactionForm {
   amount: number;
@@ -24,36 +26,94 @@ const categories = [
 
 const Transactions = () => {
   const [showForm, setShowForm] = useState(false);
-  const [transactions, setTransactions] = useState<any[]>([]);
+  const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string>('');
 
-  const { register, handleSubmit, reset, formState: { errors } } = useForm<TransactionForm>();
+  const { register, handleSubmit, reset, setValue, formState: { errors } } = useForm<TransactionForm>();
+
+  // Load transactions on component mount
+  useEffect(() => {
+    loadTransactions();
+  }, []);
+
+  const loadTransactions = async () => {
+    try {
+      setLoading(true);
+      setError('');
+      const response = await transactionService.getTransactions({ limit: 50 });
+      setTransactions(response.transactions);
+    } catch (err) {
+      console.error('Error loading transactions:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load transactions');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const onSubmit = async (data: TransactionForm) => {
     try {
       setLoading(true);
-      // Here we'll make the API call to create a transaction
-      console.log('Creating transaction:', data);
+      setError('');
+
+      if (editingTransaction) {
+        // Update existing transaction
+        await transactionService.updateTransaction(editingTransaction.id, data);
+      } else {
+        // Create new transaction
+        await transactionService.createTransaction(data);
+      }
       
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // Reload transactions to show updated data
+      await loadTransactions();
       
-      // Add to local state for now
-      const newTransaction = {
-        id: Date.now().toString(),
-        ...data,
-        date: new Date(data.date).toISOString(),
-        createdAt: new Date().toISOString()
-      };
-      
-      setTransactions([newTransaction, ...transactions]);
+      // Reset form and close
       reset();
       setShowForm(false);
-    } catch (error) {
-      console.error('Error creating transaction:', error);
+      setEditingTransaction(null);
+    } catch (err) {
+      console.error('Error saving transaction:', err);
+      setError(err instanceof Error ? err.message : 'Failed to save transaction');
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleEdit = (transaction: Transaction) => {
+    setEditingTransaction(transaction);
+    setShowForm(true);
+    
+    // Populate form with transaction data
+    setValue('amount', transaction.amount);
+    setValue('description', transaction.description);
+    setValue('category', transaction.category);
+    setValue('type', transaction.type);
+    setValue('date', new Date(transaction.date).toISOString().split('T')[0]);
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!window.confirm('Are you sure you want to delete this transaction?')) {
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setError('');
+      await transactionService.deleteTransaction(id);
+      await loadTransactions();
+    } catch (err) {
+      console.error('Error deleting transaction:', err);
+      setError(err instanceof Error ? err.message : 'Failed to delete transaction');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setShowForm(false);
+    setEditingTransaction(null);
+    reset();
   };
 
   return (
@@ -63,15 +123,25 @@ const Transactions = () => {
         <button
           onClick={() => setShowForm(!showForm)}
           className="mt-2 sm:mt-0 btn btn-primary"
+          disabled={loading}
         >
           {showForm ? 'Cancel' : '+ Add Transaction'}
         </button>
       </div>
 
-      {/* Add Transaction Form */}
+      {/* Error Display */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-lg">
+          {error}
+        </div>
+      )}
+
+      {/* Add/Edit Transaction Form */}
       {showForm && (
         <div className="card">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Add New Transaction</h2>
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">
+            {editingTransaction ? 'Edit Transaction' : 'Add New Transaction'}
+          </h2>
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
@@ -98,7 +168,8 @@ const Transactions = () => {
                 <input
                   {...register('amount', { 
                     required: 'Amount is required',
-                    min: { value: 0.01, message: 'Amount must be positive' }
+                    min: { value: 0.01, message: 'Amount must be positive' },
+                    valueAsNumber: true
                   })}
                   type="number"
                   step="0.01"
@@ -167,11 +238,11 @@ const Transactions = () => {
                 disabled={loading}
                 className="btn btn-primary flex-1"
               >
-                {loading ? 'Adding...' : 'Add Transaction'}
+                {loading ? 'Saving...' : editingTransaction ? 'Update Transaction' : 'Add Transaction'}
               </button>
               <button
                 type="button"
-                onClick={() => setShowForm(false)}
+                onClick={handleCancelEdit}
                 className="btn btn-secondary"
               >
                 Cancel
@@ -183,9 +254,15 @@ const Transactions = () => {
 
       {/* Transactions List */}
       <div className="card">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">Recent Transactions</h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-gray-900">Recent Transactions</h2>
+          {loading && (
+            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600"></div>
+          )}
+        </div>
+        
         <div className="space-y-3">
-          {transactions.length === 0 ? (
+          {transactions.length === 0 && !loading ? (
             <div className="text-center py-8 text-gray-500">
               <span className="text-4xl mb-4 block">💳</span>
               <p className="text-lg font-medium">No transactions yet</p>
@@ -195,13 +272,13 @@ const Transactions = () => {
             transactions.map((transaction) => (
               <div
                 key={transaction.id}
-                className="flex items-center justify-between p-4 border border-gray-200 rounded-lg"
+                className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:bg-gray-50"
               >
-                <div className="flex items-center">
+                <div className="flex items-center flex-1">
                   <span className="text-2xl mr-4">
                     {transaction.type === 'EXPENSE' ? '💸' : '💰'}
                   </span>
-                  <div>
+                  <div className="flex-1">
                     <p className="font-medium text-gray-900">{transaction.description}</p>
                     <div className="flex items-center space-x-4 text-sm text-gray-500">
                       <span>{transaction.category}</span>
@@ -210,13 +287,33 @@ const Transactions = () => {
                     </div>
                   </div>
                 </div>
-                <div className="text-right">
-                  <p className={`text-lg font-semibold ${
-                    transaction.type === 'EXPENSE' ? 'text-red-600' : 'text-green-600'
-                  }`}>
-                    {transaction.type === 'EXPENSE' ? '-' : '+'}${transaction.amount}
-                  </p>
-                  <p className="text-sm text-gray-500 capitalize">{transaction.type.toLowerCase()}</p>
+                
+                <div className="flex items-center space-x-4">
+                  <div className="text-right">
+                    <p className={`text-lg font-semibold ${
+                      transaction.type === 'EXPENSE' ? 'text-red-600' : 'text-green-600'
+                    }`}>
+                      {transaction.type === 'EXPENSE' ? '-' : '+'}${transaction.amount}
+                    </p>
+                    <p className="text-sm text-gray-500 capitalize">{transaction.type.toLowerCase()}</p>
+                  </div>
+                  
+                  <div className="flex space-x-2">
+                    <button
+                      onClick={() => handleEdit(transaction)}
+                      className="text-blue-600 hover:text-blue-800 p-2"
+                      title="Edit transaction"
+                    >
+                      ✏️
+                    </button>
+                    <button
+                      onClick={() => handleDelete(transaction.id)}
+                      className="text-red-600 hover:text-red-800 p-2"
+                      title="Delete transaction"
+                    >
+                      🗑️
+                    </button>
+                  </div>
                 </div>
               </div>
             ))
